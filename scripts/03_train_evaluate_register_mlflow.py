@@ -1,11 +1,14 @@
-"""Train, evaluate and register the house-price model with MLflow 3."""
+"""Train, evaluate, and register the house-price model with MLflow."""
 
+import sys
 from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
 
 import mlflow
 import mlflow.sklearn
 import pandas as pd
-from mlflow import MlflowClient
 from mlflow.models import infer_signature
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 

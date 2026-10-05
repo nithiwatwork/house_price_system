@@ -6,7 +6,7 @@ import mlflow
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_PATH = PROJECT_ROOT / "data" / "raw" / "house_prices.csv"
+DATA_PATH = PROJECT_ROOT /"data"/"raw"/"kc_house_data.csv"
 TARGET_COLUMN = "price"
 
 
