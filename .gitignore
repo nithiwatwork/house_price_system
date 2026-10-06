@@ -75,6 +75,8 @@ data/rejected/*.csv
 artifacts/**/*.joblib
 artifacts/data_validation_report.json
 !artifacts/serving_model/MANIFEST.json
-include/serving_model/*.joblib
+include/schema.json
+include/serving_model/*
+!include/serving_model/.gitkeep
 include/runs/
 processed_data/

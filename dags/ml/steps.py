@@ -1,356 +1,410 @@
-"""Step implementations for House Price Airflow Pipeline following TFX-style architecture."""
+"""ตรรกะของแต่ละขั้นในไปป์ไลน์ — เขียนเป็นฟังก์ชัน Python ธรรมดา ไม่ import airflow เลย
 
+ทำไมต้องแยกแบบนี้
+  1. ทดสอบได้ด้วย pytest ธรรมดาโดยไม่ต้องยก Airflow ขึ้นมา
+  2. ย้ายไป orchestrator ตัวอื่น (Kubeflow, Prefect) ได้โดยไม่ต้องเขียนตรรกะใหม่
+  3. ไฟล์ DAG จะเหลือแค่ "ลำดับงาน" ซึ่งอ่านง่ายและรีวิวง่าย
+
+ชื่อฟังก์ชันตั้งตามคอมโพเนนต์ของ TFX ใน Lecture 11 เพื่อให้เทียบกันได้ตรง ๆ
+
+ชุดข้อมูล: King County House Sales — ทำนายราคาบ้าน (House Price Regression)
+เป้าหมายคือ y = price (USD)
+"""
 from __future__ import annotations
 
 import json
 import os
 import shutil
-import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-
-EXPECTED_COLUMNS = [
-    "id",
-    "date",
-    "price",
-    "bedrooms",
-    "bathrooms",
-    "sqft_living",
-    "sqft_lot",
-    "floors",
-    "waterfront",
-    "view",
-    "condition",
-    "grade",
-    "sqft_above",
-    "sqft_basement",
-    "yr_built",
-    "yr_renovated",
-    "zipcode",
-    "lat",
-    "long",
-    "sqft_living15",
-    "sqft_lot15",
-]
+from ml.config import (
+    BASELINE_MAPE,
+    CATEGORICAL,
+    DATA_CSV,
+    FEATURES,
+    MAX_MAPE,
+    MAX_MODEL_SIZE_MB,
+    MIN_R2,
+    NUMERIC,
+    SERVING,
+    TARGET,
+    run_dir,
+)
 
 
-def _find_data_file(data_file: str) -> Path:
-    """Find data file path across common locations."""
-    candidates = [
-        Path(data_file),
-        PROJECT_ROOT / data_file,
-        PROJECT_ROOT / "data" / "raw" / data_file,
-        PROJECT_ROOT / "data" / "corrupted" / data_file,
-        PROJECT_ROOT / "data" / data_file,
-        Path("/opt/airflow/data/raw") / data_file,
-        Path("/opt/airflow/data/corrupted") / data_file,
-        Path("/opt/airflow/data") / data_file,
-    ]
-    for p in candidates:
-        if p.exists() and p.is_file():
-            return p
-    # Default to raw kc_house_data.csv if exists
-    default_path = PROJECT_ROOT / "data" / "raw" / "kc_house_data.csv"
-    if default_path.exists():
-        return default_path
-    raise FileNotFoundError(f"Could not locate data file: {data_file}")
+def _safe_copy(src: Path | str, dst: Path | str) -> None:
+    """Safe copy that works on Windows / WSL2 Docker bind mounts without failing on utime/copystat."""
+    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        shutil.copyfileobj(fsrc, fdst)
 
 
-def example_gen(run_id: str, data_file: str = "kc_house_data.csv") -> dict[str, Any]:
-    """Ingest dataset and perform reproducible train/test partition."""
-    source_path = _find_data_file(data_file)
-    df = pd.read_csv(source_path)
+def read_house_data(csv_path: Path) -> pd.DataFrame:
+    """อ่านไฟล์ข้อมูลราคาบ้านแล้วทำความสะอาดให้เป็นชุดที่ใช้เทรนได้"""
+    df = pd.read_csv(csv_path)
+    # id และ date ไม่ใช่ฟีเจอร์เชิงกายภาพของตัวบ้าน ตัดออกเพื่อป้องกันสัญญาณรบกวน
+    cols_to_drop = [c for c in ["id", "date"] if c in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
 
-    run_dir = PROJECT_ROOT / "include" / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    num_cols = [c for c in NUMERIC if c in df.columns and df[c].isna().any()]
+    for c in num_cols:
+        df[c] = df[c].fillna(df[c].median())
 
-    raw_path = run_dir / "raw_data.csv"
-    train_path = run_dir / "train.csv"
-    test_path = run_dir / "test.csv"
+    cat_cols = [c for c in CATEGORICAL if c in df.columns and df[c].isna().any()]
+    for c in cat_cols:
+        df[c] = df[c].fillna(df[c].mode()[0])
 
-    df.to_csv(raw_path, index=False)
+    return df
 
-    train_df, test_df = train_test_split(df, test_size=0.20, random_state=42)
+
+# ---------------------------------------------------------------- 1. ExampleGen
+def example_gen(run_id: str, data_file: str | None = None) -> dict[str, Any]:
+    """อ่านข้อมูลดิบ ทำความสะอาด แล้วแบ่ง train/eval (80/20)
+
+    คืนค่าเป็น dict ของ "เส้นทางไฟล์" ไม่ใช่ DataFrame
+    เพราะค่าที่ task ส่งต่อกันใน Airflow จะถูกเก็บใน XCom ซึ่งอยู่ในฐานข้อมูล metadata
+    ถ้ายัด DataFrame ลงไปจะทำให้ฐานข้อมูลบวมและ pipeline ช้าลงมาก
+    เขียนเป็นไฟล์ แล้วส่งต่อแค่ path
+    """
+    d = run_dir(run_id)
+    if not data_file:
+        csv_path = DATA_CSV
+    else:
+        # ค้นหาตำแหน่งไฟล์ข้อมูลตามโฟลเดอร์ที่เป็นไปได้
+        candidates = [
+            Path(data_file),
+            DATA_CSV.parent / data_file,
+            DATA_CSV.parent.parent / "raw" / data_file,
+            DATA_CSV.parent.parent / "corrupted" / data_file,
+            DATA_CSV.parent.parent / data_file,
+        ]
+        csv_path = next((p for p in candidates if p.exists() and p.is_file()), DATA_CSV)
+
+    df = read_house_data(csv_path)
+
+    train_df, eval_df = train_test_split(df, test_size=0.20, random_state=42)
+    train_path, eval_path = d / "train.csv", d / "eval.csv"
     train_df.to_csv(train_path, index=False)
-    test_df.to_csv(test_path, index=False)
-
-    # Sync to processed_data directory
-    processed_dir = PROJECT_ROOT / "processed_data"
-    processed_dir.mkdir(parents=True, exist_ok=True)
-    train_df.to_csv(processed_dir / "train.csv", index=False)
-    test_df.to_csv(processed_dir / "test.csv", index=False)
-
-    print(f"[ExampleGen] Ingested {len(df):,} rows from {source_path}")
-    print(f"[ExampleGen] Train: {len(train_df):,} rows -> {train_path}")
-    print(f"[ExampleGen] Test:  {len(test_df):,} rows -> {test_path}")
+    eval_df.to_csv(eval_path, index=False)
 
     return {
-        "run_id": run_id,
-        "run_dir": str(run_dir),
+        "source": str(csv_path),
+        "train": str(train_path),
+        "eval": str(eval_path),
         "train_path": str(train_path),
-        "test_path": str(test_path),
-        "raw_path": str(raw_path),
+        "test_path": str(eval_path),
+        "run_dir": str(d),
+        "n_train": len(train_df),
+        "n_eval": len(eval_df),
         "num_rows": len(df),
         "num_cols": len(df.columns),
-        "data_file": data_file,
     }
 
 
+# ---------------------------------------------------------------- 2. StatisticsGen
 def statistics_gen(run_id: str, examples: dict[str, Any]) -> str:
-    """Generate statistical profile for the ingested training data."""
-    train_df = pd.read_csv(examples["train_path"])
-    run_dir = Path(examples["run_dir"])
+    """สรุปสถิติของชุด train ไว้เป็นไฟล์ JSON ให้ขั้นถัดไปใช้ตรวจ"""
+    d = run_dir(run_id)
+    train_file = examples.get("train", examples.get("train_path"))
+    df = pd.read_csv(train_file)
 
     stats = {
-        "row_count": len(train_df),
-        "column_count": len(train_df.columns),
-        "numeric_summary": train_df.describe().to_dict(),
-        "missing_counts": train_df.isnull().sum().to_dict(),
+        "n_rows": len(df),
+        "numeric": {
+            c: {
+                "min": float(df[c].min()),
+                "max": float(df[c].max()),
+                "mean": round(float(df[c].mean()), 4),
+                "missing": int(df[c].isna().sum()),
+            }
+            for c in NUMERIC
+            if c in df.columns
+        },
+        "categorical": {
+            c: sorted(df[c].dropna().astype(str).unique().tolist())
+            for c in CATEGORICAL
+            if c in df.columns
+        },
+        "target_mean": round(float(df[TARGET].mean()), 4) if TARGET in df.columns else None,
     }
-
-    stats_path = run_dir / "statistics.json"
-    stats_path.write_text(json.dumps(stats, indent=2, default=str), encoding="utf-8")
-    print(f"[StatisticsGen] Summary saved to {stats_path}")
-    return str(stats_path)
+    path = d / "statistics.json"
+    path.write_text(json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
+    return str(path)
 
 
+# ---------------------------------------------------------------- 3. SchemaGen
 def schema_gen(run_id: str, statistics_path: str) -> str:
-    """Infer and emit data schema contract and validation constraints."""
-    run_dir = Path(statistics_path).parent
+    """สร้าง schema จากสถิติ ถ้ามี schema กลางอยู่แล้วให้ใช้ตัวเดิม
 
-    schema_contract = {
-        "expected_columns": EXPECTED_COLUMNS,
-        "constraints": {
-            "price": {"min": 1.0, "nullable": False},
-            "bedrooms": {"min": 0, "max": 50, "nullable": False},
-            "sqft_living": {"min": 100, "nullable": False},
+    schema คือ "สัญญา" ของข้อมูล ต้องอยู่นิ่งข้ามการรัน ไม่ใช่สร้างใหม่ทุกครั้ง
+    ไม่งั้นข้อมูลเสียจะกลายเป็นมาตรฐานใหม่โดยอัตโนมัติ และ ExampleValidator จะไม่มีวันจับอะไรได้เลย
+    """
+    from ml.config import INCLUDE
+
+    shared = INCLUDE / "schema.json"
+    if shared.exists():
+        return str(shared)
+
+    stats = json.loads(Path(statistics_path).read_text(encoding="utf-8"))
+    schema = {
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "numeric": {
+            c: {
+                "min": stats["numeric"][c]["min"],
+                "max": stats["numeric"][c]["max"],
+                "required": True,
+            }
+            for c in NUMERIC
+            if c in stats.get("numeric", {})
+        },
+        "categorical": {
+            c: {
+                "domain": stats["categorical"][c],
+                "required": True,
+            }
+            for c in CATEGORICAL
+            if c in stats.get("categorical", {})
+        },
+        "target": {
+            "name": TARGET,
+            "min": 1.0,
+            "required": True,
         },
     }
-
-    schema_path = run_dir / "schema.json"
-    schema_path.write_text(json.dumps(schema_contract, indent=2), encoding="utf-8")
-    print(f"[SchemaGen] Schema definition saved to {schema_path}")
-    return str(schema_path)
+    shared.parent.mkdir(parents=True, exist_ok=True)
+    shared.write_text(json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8")
+    return str(shared)
 
 
+# ---------------------------------------------------------------- 4. ExampleValidator
 def example_validator(examples: dict[str, Any], schema_path: str) -> dict[str, Any]:
-    """Validate data against schema contracts and identify anomalies."""
-    train_df = pd.read_csv(examples["train_path"])
+    """ตรวจข้อมูลกับ schema แล้วคืนรายการความผิดปกติ
+
+    ขั้นนี้คือด่านที่ต้อง "หยุด pipeline" เมื่อเจอข้อมูลเสีย
+    ถ้าปล่อยผ่านไป เราจะได้โมเดลที่เทรนจากขยะโดยไม่มีใครรู้จนกว่าจะสายเกินไป
+    """
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    train_file = examples.get("train", examples.get("train_path"))
+    df = pd.read_csv(train_file)
     anomalies: list[str] = []
 
-    # 1. Missing columns check
-    missing_cols = [c for c in EXPECTED_COLUMNS if c not in train_df.columns]
-    if missing_cols:
-        anomalies.append(f"Missing required columns: {missing_cols}")
+    # ตรวจสอบตัวแปรเชิงตัวเลข
+    for col, rule in schema.get("numeric", {}).items():
+        if col not in df.columns:
+            anomalies.append(f"{col}: ขาดคอลัมน์ที่ schema กำหนด")
+            continue
+        if df[col].isna().any():
+            anomalies.append(f"{col}: มีค่าว่าง {int(df[col].isna().sum())} แถว")
+        lo, hi = float(df[col].min()), float(df[col].max())
+        # กฎเชิงโดเมน: คอลัมน์ที่ไม่เคยติดลบ ห้ามติดลบเด็ดขาด ไม่ต้องเผื่อขอบเขต
+        if rule.get("min", 0) >= 0 and lo < 0:
+            anomalies.append(f"{col}: พบค่าติดลบ {lo:.2f} ทั้งที่ไม่ควรติดลบ")
+        # เผื่อขอบเขตไว้ 20% เพราะข้อมูลใหม่ย่อมมีค่าที่กว้างกว่าเดิมได้บ้าง
+        span = (rule["max"] - rule["min"]) or 1.0
+        if lo < rule["min"] - 0.2 * span or hi > rule["max"] + 0.2 * span:
+            anomalies.append(f"{col}: ค่าอยู่นอกช่วงที่คาด ({lo:.2f} ถึง {hi:.2f})")
 
-    # 2. Check for negative or zero price
-    if "price" in train_df.columns:
-        invalid_price = int((train_df["price"] <= 0).sum())
+    # ตรวจสอบเป้าหมายราคา (Target price)
+    if TARGET in df.columns:
+        invalid_price = int((df[TARGET] <= 0).sum())
         if invalid_price > 0:
-            anomalies.append(f"Invalid price (<=0) found in {invalid_price} rows")
+            anomalies.append(f"{TARGET}: พบราคา <= 0 จำนวน {invalid_price} แถว ทั้งที่ไม่ควรเกิดขึ้น")
 
-    # 3. Check for impossible bedroom counts
-    if "bedrooms" in train_df.columns:
-        bad_bedrooms = int((train_df["bedrooms"] > 50).sum())
-        if bad_bedrooms > 0:
-            anomalies.append(f"Impossible bedroom count (>50) found in {bad_bedrooms} rows")
+    # ตรวจสอบตัวแปรหมวดหมู่
+    for col, rule in schema.get("categorical", {}).items():
+        if col not in df.columns:
+            anomalies.append(f"{col}: ขาดคอลัมน์ที่ schema กำหนด")
+            continue
+        unseen = set(df[col].dropna().astype(str).unique()) - {str(x) for x in rule["domain"]}
+        if unseen:
+            anomalies.append(f"{col}: พบค่าที่ไม่เคยเห็นใน schema {sorted(unseen)[:5]}")
 
-    # 4. Check for missing values in critical features
-    null_counts = train_df.isnull().sum()
-    cols_with_nulls = null_counts[null_counts > 0].to_dict()
-    if cols_with_nulls:
-        anomalies.append(f"Missing values detected: {cols_with_nulls}")
-
-    ok = len(anomalies) == 0
-    print(f"[ExampleValidator] Validation status: {'PASS' if ok else 'FAIL'}")
-    return {
-        "ok": ok,
-        "anomalies": anomalies,
-    }
+    return {"ok": not anomalies, "anomalies": anomalies}
 
 
+# ---------------------------------------------------------------- 5. Transform
 def transform(run_id: str, examples: dict[str, Any]) -> str:
-    """Preprocess features using TabularPreprocessor learned from training data only."""
-    train_df = pd.read_csv(examples["train_path"])
-    test_df = pd.read_csv(examples["test_path"])
+    """fit ตัวแปลงข้อมูลจากชุด train เท่านั้น แล้วบันทึกเป็น artifact
 
-    run_dir = Path(examples["run_dir"])
-    transform_dir = run_dir / "transform"
-    transform_dir.mkdir(parents=True, exist_ok=True)
+    ตัวแปลงต้อง fit จาก train เท่านั้น และถูกใช้ซ้ำทั้งตอน eval และตอนให้บริการ
+    นี่คือกลไกกัน Training-Serving Skew ที่ Lecture 4 พูดถึง
+    """
+    d = run_dir(run_id)
+    train_file = examples.get("train", examples.get("train_path"))
+    train_df = pd.read_csv(train_file)
 
-    X_train = train_df.drop("price", axis=1)
-    y_train = train_df["price"].values
-    X_test = test_df.drop("price", axis=1)
-    y_test = test_df["price"].values
+    num_features = [c for c in NUMERIC if c in train_df.columns]
+    cat_features = [c for c in CATEGORICAL if c in train_df.columns]
+    valid_features = num_features + cat_features
 
-    from src.preprocessing import build_preprocessing_pipeline
+    pre = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), num_features),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_features),
+        ],
+        remainder="drop",
+        sparse_threshold=0.0,
+    )
 
-    preprocessor = build_preprocessing_pipeline()
-    X_train_proc = preprocessor.fit_transform(X_train)
-    X_test_proc = preprocessor.transform(X_test)
+    pre.fit(train_df[valid_features])
 
-    joblib.dump(preprocessor, transform_dir / "preprocessor.joblib")
-    joblib.dump(X_train_proc, transform_dir / "X_train.joblib")
-    joblib.dump(y_train, transform_dir / "y_train.joblib")
-    joblib.dump(X_test_proc, transform_dir / "X_test.joblib")
-    joblib.dump(y_test, transform_dir / "y_test.joblib")
-
-    print(f"[Transform] Feature transform completed -> {transform_dir}")
-    return str(transform_dir)
+    path = d / "transform.joblib"
+    joblib.dump(pre, path)
+    return str(path)
 
 
+# ---------------------------------------------------------------- 5b. DataCard (task ใหม่ของกลุ่ม)
 def data_card_gen(run_id: str, examples: dict[str, Any]) -> str:
-    """Generate data profile card in parallel with model training."""
-    train_df = pd.read_csv(examples["train_path"])
-    run_dir = Path(examples["run_dir"])
+    """สร้าง "การ์ดข้อมูล" ของชุด train — ทำงานขนานกับ trainer ได้เพราะไม่พึ่งโมเดล
+
+    task ใหม่ของกลุ่ม: สรุปโปรไฟล์ของข้อมูลไว้อ้างอิงกับผู้มีส่วนได้ส่วนเสีย
+    เช่น จำนวนแถว ค่าเฉลี่ยราคา คอลัมน์ที่มีค่าว่าง และจำนวนค่าที่ไม่ซ้ำต่อฟีเจอร์
+    """
+    d = run_dir(run_id)
+    train_file = examples.get("train", examples.get("train_path"))
+    df = pd.read_csv(train_file)
 
     card = {
         "dataset_name": "King County House Sales",
-        "run_id": run_id,
-        "total_records": examples["num_rows"],
-        "training_records": len(train_df),
-        "features": list(train_df.columns),
-        "target": "price",
-        "price_summary": {
-            "min": float(train_df["price"].min()) if "price" in train_df.columns else None,
-            "median": float(train_df["price"].median()) if "price" in train_df.columns else None,
-            "max": float(train_df["price"].max()) if "price" in train_df.columns else None,
+        "n_rows": len(df),
+        "n_missing": {c: int(df[c].isna().sum()) for c in df.columns if df[c].isna().any()},
+        "n_unique": {c: int(df[c].nunique()) for c in FEATURES if c in df.columns},
+        "target_summary": {
+            "mean": round(float(df[TARGET].mean()), 2) if TARGET in df.columns else None,
+            "median": round(float(df[TARGET].median()), 2) if TARGET in df.columns else None,
+            "min": round(float(df[TARGET].min()), 2) if TARGET in df.columns else None,
+            "max": round(float(df[TARGET].max()), 2) if TARGET in df.columns else None,
         },
     }
-
-    card_path = run_dir / "data_card.json"
-    card_path.write_text(json.dumps(card, indent=2), encoding="utf-8")
-    print(f"[DataCard] Data profile card generated -> {card_path}")
-    return str(card_path)
+    path = d / "data_card.json"
+    path.write_text(json.dumps(card, indent=2, ensure_ascii=False), encoding="utf-8")
+    return str(path)
 
 
+# ---------------------------------------------------------------- 6. Trainer
 def trainer(run_id: str, examples: dict[str, Any], transform_path: str, max_iter: int = 200) -> str:
-    """Train HistGradientBoostingRegressor on preprocessed training data."""
-    transform_dir = Path(transform_path)
-    X_train_proc = joblib.load(transform_dir / "X_train.joblib")
-    y_train = joblib.load(transform_dir / "y_train.joblib")
+    """เทรนโมเดล แล้วบันทึกเป็น Pipeline ก้อนเดียวที่มีตัวแปลงข้อมูลรวมอยู่ด้วย"""
+    d = run_dir(run_id)
+    train_file = examples.get("train", examples.get("train_path"))
+    train_df = pd.read_csv(train_file)
+    pre = joblib.load(transform_path)
 
-    model = HistGradientBoostingRegressor(
-        max_iter=int(max_iter),
-        learning_rate=0.05,
-        max_depth=8,
-        random_state=42,
-    )
-    # Train on log1p(y) to minimize percentage error (MAPE)
-    model.fit(X_train_proc, np.log1p(y_train))
+    valid_features = [c for c in FEATURES if c in train_df.columns]
+    X_train = train_df[valid_features]
+    y_train = train_df[TARGET].values
 
-    run_dir = Path(examples["run_dir"])
-    model_path = run_dir / "model.joblib"
-    joblib.dump(model, model_path)
-    print(f"[Trainer] Model successfully trained and saved -> {model_path}")
-    return str(model_path)
+    model = Pipeline([
+        ("pre", pre),
+        (
+            "reg",
+            HistGradientBoostingRegressor(
+                max_iter=int(max_iter),
+                learning_rate=0.05,
+                max_depth=8,
+                random_state=42,
+            ),
+        ),
+    ])
+    # เทรนบน log1p(y) เพื่อลด percentage error (MAPE)
+    model.fit(X_train, np.log1p(y_train))
+
+    path = d / "model.joblib"
+    joblib.dump(model, path)
+    return str(path)
 
 
+# ---------------------------------------------------------------- 7. Evaluator
 def evaluator(run_id: str, examples: dict[str, Any], model_path: str) -> dict[str, Any]:
-    """Evaluate model performance against baseline and quality gating rules."""
-    run_dir = Path(model_path).parent
-    transform_dir = run_dir / "transform"
+    """วัดผลโมเดลใหม่ เทียบกับเกณฑ์ขั้นต่ำ กับโมเดลที่ให้บริการอยู่ (Baseline)
 
+    คืนค่า blessed = True ก็ต่อเมื่อผ่านทั้งสามเงื่อนไข
+    การเทียบกับโมเดลเดิมสำคัญมาก เพราะกันไม่ให้ pipeline เปลี่ยนโมเดลไปเรื่อย ๆ
+    ทั้งที่ตัวใหม่ไม่ได้ดีกว่าเดิมจริง
+    """
+    d = run_dir(run_id)
+    eval_file = examples.get("eval", examples.get("test_path"))
+    ev = pd.read_csv(eval_file)
     model = joblib.load(model_path)
-    X_test_proc = joblib.load(transform_dir / "X_test.joblib")
-    y_test = joblib.load(transform_dir / "y_test.joblib")
 
-    preds_log = model.predict(X_test_proc)
+    valid_features = [c for c in FEATURES if c in ev.columns]
+    preds_log = model.predict(ev[valid_features])
     preds = np.expm1(preds_log)
+    y_true = ev[TARGET].values
 
-    mape = float(mean_absolute_percentage_error(y_test, preds))
-    rmse = float(np.sqrt(mean_squared_error(y_test, preds)))
-    r2 = float(r2_score(y_test, preds))
+    mape = float(mean_absolute_percentage_error(y_true, preds))
+    rmse = float(np.sqrt(mean_squared_error(y_true, preds)))
+    r2 = float(r2_score(y_true, preds))
     size_mb = os.path.getsize(model_path) / (1024 * 1024)
 
-    baseline_mape = 0.20  # 20% baseline
-    improvement = baseline_mape - mape
+    baseline = _current_serving_metrics()
+    baseline_mape = baseline.get("mape", BASELINE_MAPE)
+    improvement = round(baseline_mape - mape, 4)
 
-    # 3 Blessing Conditions:
-    # 1. MAPE < 15% (Primary optimizing metric)
-    # 2. R2 >= 0.70
-    # 3. Model size < 20 MB
-    blessed = bool(mape < 0.15 and r2 >= 0.70 and size_mb < 20.0)
+    # 3 เงื่อนไข Blessing Gate:
+    # 1. MAPE ผ่านเกณฑ์ขั้นต่ำ (< 15%)
+    # 2. R2 ผ่านเกณฑ์ขั้นต่ำ (>= 0.70)
+    # 3. ขนาดโมเดลต้องไม่เกินเกณฑ์ (< 20 MB) และมีประสิทธิภาพดีกว่าหรือเทียบเท่าเดิม
+    passes_threshold = mape < MAX_MAPE and r2 >= MIN_R2
+    beats_baseline = improvement >= 0.0 or baseline.get("mape") is None
+    passes_size = size_mb < MAX_MODEL_SIZE_MB
 
-    print("=" * 60)
-    print(f"[Evaluator] MAPE: {mape:.4f} (Goal < 0.15) -> {'PASS' if mape < 0.15 else 'FAIL'}")
-    print(f"[Evaluator] RMSE: ${rmse:,.2f}")
-    print(f"[Evaluator] R2:   {r2:.4f} (Goal >= 0.70) -> {'PASS' if r2 >= 0.70 else 'FAIL'}")
-    print(f"[Evaluator] Size: {size_mb:.2f} MB (Goal < 20 MB)")
-    print(f"[Evaluator] Blessing Gate: {'BLESSED' if blessed else 'REJECTED'}")
-    print("=" * 60)
+    blessed = bool(passes_threshold and beats_baseline and passes_size)
 
-    return {
-        "blessed": blessed,
+    metrics = {
         "mape": round(mape, 4),
         "rmse": round(rmse, 2),
         "r2": round(r2, 4),
-        "baseline_mape": baseline_mape,
-        "improvement": round(improvement, 4),
         "size_mb": round(size_mb, 2),
-        "transform_dir": str(transform_dir),
+        "baseline_mape": baseline_mape,
+        "improvement": improvement,
+        "passes_threshold": passes_threshold,
+        "beats_baseline": beats_baseline,
+        "blessed": blessed,
+        "n_eval": len(ev),
     }
+    (d / "metrics.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+    return metrics
 
 
-def pusher(run_id: str, model_path: str, metrics: dict[str, Any], schema_path: str) -> str:
-    """Deploy model and preprocessor to serving directories and MLflow Registry."""
-    run_dir = Path(model_path).parent
-    transform_dir = Path(metrics.get("transform_dir", run_dir / "transform"))
-
-    artifacts_serving = PROJECT_ROOT / "artifacts" / "serving_model"
-    include_serving = PROJECT_ROOT / "include" / "serving_model"
-    artifacts_serving.mkdir(parents=True, exist_ok=True)
-    include_serving.mkdir(parents=True, exist_ok=True)
-
-    def _safe_copy(src: Path | str, dst: Path | str) -> None:
-        with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
-            shutil.copyfileobj(fsrc, fdst)
-
-    # 1. Deploy model & preprocessor to serving
-    _safe_copy(model_path, artifacts_serving / "model.joblib")
-    _safe_copy(model_path, include_serving / "model.joblib")
-    if (transform_dir / "preprocessor.joblib").exists():
-        _safe_copy(transform_dir / "preprocessor.joblib", artifacts_serving / "preprocessor.joblib")
-        _safe_copy(transform_dir / "preprocessor.joblib", include_serving / "preprocessor.joblib")
-
-    # 2. Log & Register with MLflow if available
+def _current_serving_metrics() -> dict[str, Any]:
+    manifest = SERVING / "MANIFEST.json"
+    if not manifest.exists():
+        return {}
     try:
-        import mlflow
-        import mlflow.sklearn
-        from mlflow import MlflowClient
+        return json.loads(manifest.read_text(encoding="utf-8")).get("metrics", {})
+    except Exception:  # noqa: BLE001
+        return {}
 
-        mlflow_db = PROJECT_ROOT / "mlflow.db"
-        mlflow.set_tracking_uri(f"sqlite:///{str(mlflow_db).replace(os.sep, '/')}")
-        mlflow.set_experiment("House Price - Airflow Pipeline")
-        with mlflow.start_run(run_name=f"airflow_{run_id}"):
-            mlflow.log_metrics({
-                "mape": metrics["mape"],
-                "rmse": metrics["rmse"],
-                "r2": metrics["r2"],
-            })
-            model = joblib.load(model_path)
-            model_info = mlflow.sklearn.log_model(
-                sk_model=model,
-                name="house_price_model",
-            )
-            reg = mlflow.register_model(model_info.model_uri, "house-price-regressor-prod")
-            client = MlflowClient()
-            client.set_registered_model_alias("house-price-regressor-prod", "staging", reg.version)
-            print(f"[Pusher] Model registered in MLflow version {reg.version} with @staging alias")
-    except Exception as e:  # noqa: BLE001
-        print(f"[Pusher] MLflow registration note: {e}")
 
-    print("[Pusher] Model successfully blessed and pushed to serving!")
-    return f"Model pushed successfully (MAPE: {metrics.get('mape')})"
+# ---------------------------------------------------------------- 8. Pusher
+def pusher(run_id: str, model_path: str, metrics: dict[str, Any], schema_path: str) -> str:
+    """คัดลอกโมเดลที่ผ่านด่านไปยังที่ให้บริการ พร้อมเขียน MANIFEST บันทึกที่มา
+
+    MANIFEST คือบันทึกสายพันธุ์ (lineage) ที่ตอบได้ว่าโมเดลที่ให้บริการอยู่ตอนนี้
+    มาจากการรันไหน ใช้ schema ไหน และมีผลวัดเท่าไร ซึ่งเป็นสิ่งที่ผู้ตรวจสอบจะถามหา
+    """
+    SERVING.mkdir(parents=True, exist_ok=True)
+    _safe_copy(model_path, SERVING / "model.joblib")
+
+    manifest = {
+        "run_id": run_id,
+        "pushed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source_model": str(model_path),
+        "schema": str(schema_path),
+        "metrics": metrics,
+    }
+    path = SERVING / "MANIFEST.json"
+    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    return str(path)

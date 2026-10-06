@@ -50,7 +50,7 @@ groups:
           description: "สัดส่วนฟีเจอร์ที่ drift = {{ $value }} เกินเกณฑ์ 0.20"
 
       - alert: ModelPerformanceDegraded
-        expr: max(ml_realized_mape) > 0.15 or min(ml_realized_roc_auc) < 0.78
+        expr: max(ml_realized_mape) > 0.15
         for: 1m
         labels:
           severity: critical
@@ -61,7 +61,7 @@ groups:
 
       # ค่าจริงแย่กว่าค่าที่ประเมินไว้มาก = สัญญาณเฉพาะของ Concept Drift
       - alert: ConceptDriftSuspected
-        expr: (max(ml_realized_mape) - min(ml_estimated_mape)) > 0.05 or (max(ml_estimated_roc_auc) - min(ml_realized_roc_auc)) > 0.10
+        expr: (max(ml_realized_mape) - min(ml_estimated_mape)) > 0.05
         for: 1m
         labels:
           severity: critical

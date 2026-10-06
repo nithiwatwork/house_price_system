@@ -6,6 +6,8 @@ Prometheus ใช้วิธี "ดึง" (pull) คือวิ่งมา�
 
 รันแยกพอร์ตจากบริการทำนาย เพราะเป็นคนละวงจรชีวิตกัน
 """
+from __future__ import annotations
+
 import json
 import time
 from pathlib import Path
@@ -20,8 +22,6 @@ DRIFT_SHARE = Gauge("ml_data_drift_share", "สัดส่วนฟีเจอ
 DRIFTED_N = Gauge("ml_drifted_features", "จำนวนฟีเจอร์ที่ drift", ["week"])
 REALIZED_MAPE = Gauge("ml_realized_mape", "MAPE จากเฉลยจริง", ["week"])
 ESTIMATED_MAPE = Gauge("ml_estimated_mape", "MAPE ที่ NannyML ประเมินโดยไม่ใช้เฉลย", ["week"])
-REALIZED_AUC = Gauge("ml_realized_roc_auc", "ROC AUC จากเฉลยจริง (ถ้ามี)", ["week"])
-ESTIMATED_AUC = Gauge("ml_estimated_roc_auc", "ROC AUC ที่ NannyML ประเมิน (ถ้ามี)", ["week"])
 MULTIVAR = Gauge("ml_multivariate_drift", "ค่า reconstruction error จาก NannyML", ["week"])
 LAST_RUN = Gauge("ml_monitoring_last_run_timestamp", "เวลาที่อ่านผลล่าสุด (unix time)")
 
@@ -29,21 +29,17 @@ LAST_RUN = Gauge("ml_monitoring_last_run_timestamp", "เวลาที่อ�
 def refresh() -> None:
     ev_path, nml_path = REPORTS / "evidently_summary.json", REPORTS / "nannyml_summary.json"
     if ev_path.exists():
-        for row in json.loads(ev_path.read_text()):
+        for row in json.loads(ev_path.read_text(encoding="utf-8")):
             week = str(row.get("week", "current"))
             DRIFT_SHARE.labels(week).set(row.get("drift_share", 0.0))
             DRIFTED_N.labels(week).set(len(row.get("drifted_features", [])))
             if "mape" in row:
                 REALIZED_MAPE.labels(week).set(row["mape"])
-            if "roc_auc" in row:
-                REALIZED_AUC.labels(week).set(row["roc_auc"])
     if nml_path.exists():
-        for row in json.loads(nml_path.read_text()):
+        for row in json.loads(nml_path.read_text(encoding="utf-8")):
             week = str(row.get("week", "current"))
             if "estimated_mape" in row:
                 ESTIMATED_MAPE.labels(week).set(row["estimated_mape"])
-            if "estimated_roc_auc" in row:
-                ESTIMATED_AUC.labels(week).set(row["estimated_roc_auc"])
             MULTIVAR.labels(week).set(row.get("multivariate_drift", 0.0))
     LAST_RUN.set(time.time())
 
