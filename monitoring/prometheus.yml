@@ -1,0 +1,20 @@
+# ตั้งค่า Prometheus: จะไปดึง metric จากที่ไหน ทุกกี่วินาที และใช้กฎแจ้งเตือนไฟล์ไหน
+global:
+  scrape_interval: 5s          # ดึงค่าทุก 5 วินาที (ในงานจริงมักตั้ง 15-60 วินาที)
+  evaluation_interval: 10s     # ประเมินกฎแจ้งเตือนทุก 10 วินาที
+
+rule_files:
+  - /etc/prometheus/alert.rules.yml
+
+scrape_configs:
+  - job_name: model-serving           # บริการทำนายราคาบ้าน — metric ฝั่งระบบ
+    static_configs:
+      - targets: ["house-price-api:8000"]
+
+  - job_name: drift-exporter          # ผลการตรวจ drift แบบ batch
+    static_configs:
+      - targets: ["drift-exporter:9101"]
+
+  - job_name: prometheus              # Prometheus เฝ้าตัวเองด้วย
+    static_configs:
+      - targets: ["localhost:9090"]

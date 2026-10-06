@@ -1,0 +1,9 @@
+# บอก Grafana ว่าให้ดึงข้อมูลจาก Prometheus ตัวไหน โดยไม่ต้องคลิกตั้งค่าเองในหน้าเว็บ
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

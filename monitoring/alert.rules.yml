@@ -1,0 +1,81 @@
+# กฎแจ้งเตือน แบ่งเป็น 2 กลุ่มตามที่บรรยายไว้ใน Lecture 10
+#   system-health   = Non-Functional Monitoring (latency, error rate, บริการล่ม)
+#   model-quality   = Functional Monitoring (drift, ประสิทธิภาพการทำนาย)
+#
+# ทุกกฎต้องมี for: เพื่อกันการเตือนจากจุดกระตุกชั่วขณะ และมี annotations ให้คนเวรอ่านรู้เรื่อง
+groups:
+  - name: system-health
+    rules:
+      - alert: ServiceDown
+        expr: up{job="model-serving"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "บริการทำนายไม่ตอบสนอง"
+          description: "Prometheus ดึง metric จาก {{ $labels.instance }} ไม่ได้เกิน 30 วินาที"
+
+      # SLO: p95 ต้องไม่เกิน 300 ms — histogram_quantile คำนวณจากถังของ Histogram
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(ml_request_latency_seconds_bucket[1m]))) > 0.3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency เกิน SLO 300 ms"
+          description: "ค่าปัจจุบัน {{ $value | humanize }} วินาที"
+
+      # SLO: อัตราข้อผิดพลาดต้องไม่เกิน 1% ของคำขอทั้งหมด
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(ml_requests_total{status!="200"}[5m]))
+            / clamp_min(sum(rate(ml_requests_total[5m])), 0.001) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "อัตราข้อผิดพลาดเกิน 1%"
+          description: "error rate = {{ $value | humanizePercentage }}"
+
+  - name: model-quality
+    rules:
+      - alert: DataDriftDetected
+        expr: max(ml_data_drift_share) > 0.20
+        for: 1m
+        labels:
+          severity: warning
+          action: investigate
+        annotations:
+          summary: "ตรวจพบ Data Drift"
+          description: "สัดส่วนฟีเจอร์ที่ drift = {{ $value }} เกินเกณฑ์ 0.20"
+
+      - alert: ModelPerformanceDegraded
+        expr: max(ml_realized_mape) > 0.15 or min(ml_realized_roc_auc) < 0.78
+        for: 1m
+        labels:
+          severity: critical
+          action: retrain
+        annotations:
+          summary: "ประสิทธิภาพโมเดลราคาบ้านต่ำกว่าเกณฑ์"
+          description: "MAPE จากเฉลยจริง = {{ $value }} เกินเกณฑ์ 15% (0.15) ให้ trigger การเทรนใหม่"
+
+      # ค่าจริงแย่กว่าค่าที่ประเมินไว้มาก = สัญญาณเฉพาะของ Concept Drift
+      - alert: ConceptDriftSuspected
+        expr: (max(ml_realized_mape) - min(ml_estimated_mape)) > 0.05 or (max(ml_estimated_roc_auc) - min(ml_realized_roc_auc)) > 0.10
+        for: 1m
+        labels:
+          severity: critical
+          action: retrain
+        annotations:
+          summary: "สงสัยว่าเกิด Concept Drift ในราคาบ้าน"
+          description: "ประสิทธิภาพจริงแย่กว่าค่าที่ประเมินไว้ {{ $value }} แปลว่าความสัมพันธ์ของข้อมูลราคาบ้านเปลี่ยนไป"
+
+      # ถ้างาน batch ตาย metric จะค้างเก่า ต้องเตือนด้วย ไม่งั้นจะเข้าใจผิดว่า "ทุกอย่างปกติ"
+      - alert: MonitoringJobStale
+        expr: time() - ml_monitoring_last_run_timestamp > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "งานตรวจ drift ไม่ได้รันเกิน 1 ชั่วโมง"
+          description: "ตัวเลข drift ที่เห็นบน dashboard อาจเป็นของเก่า"
