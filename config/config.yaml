@@ -1,5 +1,5 @@
 data:
-  raw_path: data/raw/kc_house_data.csv
+  raw_path: data/raw/thailand_homes_clean.csv
   processed_dir: data/processed
   train_path: data/processed/train.csv
   validation_path: data/processed/validation.csv
