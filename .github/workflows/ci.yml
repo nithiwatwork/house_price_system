@@ -4,7 +4,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, v.1]
   pull_request:
   workflow_dispatch:                 # ปุ่ม Run workflow ในหน้า Actions
 
@@ -56,9 +56,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Download dataset
-        run: python scripts/download_dataset.py
 
       - name: Data validation
         run: python scripts/01_data_validation.py
