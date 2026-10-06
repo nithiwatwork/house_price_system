@@ -29,7 +29,7 @@ def train_evaluate_register(preprocessing_run_id: str = None, learning_rate: flo
     registers the model in the MLflow Model Registry if it meets
     the primary optimizing threshold (MAPE < 10%).
     """
-    MAPE_THRESHOLD = 0.15  # ตัวชี้วัดหลัก: MAPE < 10%
+    MAPE_THRESHOLD = 0.15  # ตัวชี้วัดหลัก: MAPE < 15%
     MAX_SIZE_MB = 20.0     # เกณฑ์ Gating: ขนาดโมเดล < 20 MB
     MODEL_NAME = "house-price-regressor-prod"
 
