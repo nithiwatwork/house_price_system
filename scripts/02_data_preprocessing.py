@@ -1,5 +1,5 @@
 import os
-import sys
+
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
@@ -10,6 +10,10 @@ except ImportError:
     MLFLOW_AVAILABLE = False
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if MLFLOW_AVAILABLE:
+    mlflow.set_tracking_uri(
+        f"sqlite:///{os.path.join(PROJECT_ROOT, 'mlflow.db').replace(os.sep, '/')}"
+    )
 DATA_PATH = os.path.join(PROJECT_ROOT, "data", "raw", "kc_house_data.csv")
 
 

@@ -1,5 +1,6 @@
 ﻿import os
 import sys
+
 import pandas as pd
 
 try:
@@ -8,7 +9,13 @@ try:
 except ImportError:
     MLFLOW_AVAILABLE = False
 
-DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "raw", "kc_house_data.csv")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if MLFLOW_AVAILABLE:
+    mlflow.set_tracking_uri(
+        f"sqlite:///{os.path.join(PROJECT_ROOT, 'mlflow.db').replace(os.sep, '/')}"
+    )
+
+DATA_PATH = os.path.join(PROJECT_ROOT, "data", "raw", "kc_house_data.csv")
 
 
 def validate_data(data_path: str = DATA_PATH):
