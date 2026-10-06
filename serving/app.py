@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from src.model import load_model
 
-
 MODEL_PATH = Path("artifacts/serving_model/house_price_model.joblib")
 
 app = FastAPI(title="House Price Prediction API")

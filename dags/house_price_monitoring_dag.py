@@ -1,6 +1,6 @@
-from datetime import datetime, timedelta
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -16,7 +16,7 @@ except ImportError:
 default_args = {
     "owner": "mlops_team",
     "depends_on_past": False,
-    "start_date": datetime(2026, 1, 1),
+    "start_date": datetime(2026, 1, 1, tzinfo=timezone.utc),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
@@ -27,7 +27,7 @@ if AIRFLOW_AVAILABLE:
         dag_id="house_price_monitoring_pipeline",
         default_args=default_args,
         description="Continuous Monitoring & Automated Retraining DAG",
-        schedule_interval="@daily",
+        schedule="@daily",
         catchup=False,
         tags=["monitoring", "drift", "auto-retrain"],
     ) as dag:

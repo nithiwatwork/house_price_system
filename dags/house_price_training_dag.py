@@ -1,7 +1,7 @@
 
-from datetime import datetime, timedelta
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 # Add project root to sys.path for Airflow workers
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -17,7 +17,7 @@ except ImportError:
 default_args = {
     "owner": "mlops_team",
     "depends_on_past": False,
-    "start_date": datetime(2026, 1, 1),
+    "start_date": datetime(2026, 1, 1, tzinfo=timezone.utc),
     "email_on_failure": False,
     "email_on_retry": False,
     "retries": 1,
@@ -30,7 +30,7 @@ if AIRFLOW_AVAILABLE:
         dag_id="house_price_training_pipeline",
         default_args=default_args,
         description="Production House Price Valuation Training DAG",
-        schedule_interval=None,  # Triggered manually or by monitoring DAG
+        schedule=None,  # Triggered manually or by monitoring DAG
         catchup=False,
         tags=["mlops", "regression", "king_county"],
     ) as dag:

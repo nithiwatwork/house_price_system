@@ -1,0 +1,91 @@
+{
+  "title": "MLOps Monitoring — House Price Prediction",
+  "uid": "mlops-house-price",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Throughput (req/s)",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(ml_requests_total[1m]))", "legendFormat": "ทุกคำขอ" },
+        { "expr": "sum(rate(ml_requests_total{status=\"200\"}[1m]))", "legendFormat": "สำเร็จ" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p50 / p95 / p99 (SLO = 300 ms)",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "red", "value": 0.3 }
+          ] }
+        }
+      },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(ml_request_latency_seconds_bucket[1m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(ml_request_latency_seconds_bucket[1m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(ml_request_latency_seconds_bucket[1m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Error rate (SLO < 1%)",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "red", "value": 0.01 }
+          ] }
+        }
+      },
+      "targets": [
+        { "expr": "sum(rate(ml_requests_total{status!=\"200\"}[5m])) / clamp_min(sum(rate(ml_requests_total[5m])), 0.001)", "legendFormat": "error rate" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "สถิติคำทำนายราคาบ้าน (Prediction Drift)",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
+      "targets": [
+        { "expr": "rate(ml_predictions_total[5m])", "legendFormat": "คำขอทำนาย (req/s)" }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Data Drift Share รายสัปดาห์ (เกณฑ์ 0.20)",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "orange", "value": 0.2 }
+          ] }
+        }
+      },
+      "targets": [{ "expr": "ml_data_drift_share", "legendFormat": "{{week}}" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "MAPE — ค่าที่ประเมิน (NannyML) เทียบกับค่าจริง (เกณฑ์ < 15%)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0.0, "max": 0.5,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "red", "value": 0.15 }
+          ] }
+        }
+      },
+      "targets": [
+        { "expr": "ml_estimated_mape", "legendFormat": "estimated {{week}}" },
+        { "expr": "ml_realized_mape", "legendFormat": "realized {{week}}" }
+      ]
+    }
+  ]
+}
