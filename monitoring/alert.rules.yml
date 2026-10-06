@@ -1,0 +1,20 @@
+groups:
+  - name: mlops_drift_alerts
+    rules:
+      - alert: DataDriftDetected
+        expr: data_drift_p_value < 0.05
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Data Drift Detected!"
+          description: "Feature distribution has changed significantly (p-value < 0.05)."
+
+      - alert: ConceptDriftDetected
+        expr: concept_drift_mape > 0.10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model Performance Dropped!"
+          description: "MAPE exceeded 10% threshold."

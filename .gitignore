@@ -75,3 +75,7 @@ data/rejected/*.csv
 artifacts/*.joblib
 artifacts/data_validation_report.json
 !artifacts/serving_model/MANIFEST.json
+monitoring/grafana/plugins/
+monitoring/grafana/data/
+monitoring/grafana/png/
+monitoring/grafana/grafana.db

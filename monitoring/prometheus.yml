@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s # ให้ไปดึงข้อมูลทุกๆ 15 วินาที
+
+scrape_configs:
+  - job_name: 'model-serving'
+    metrics_path: '/metrics'
+    static_configs:
+      # ใช้ชื่อ service 'model-serving' ตามที่ตั้งใน docker-compose
+      - targets: ['model-serving:8000']

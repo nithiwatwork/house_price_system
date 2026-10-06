@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  # 1. Model Serving API (FastAPI)
+  model-serving:
+    build: .
+    container_name: model_serving_service
+    ports:
+      - "8000:8000"
+    restart: always
+
+  # 2. Prometheus Service
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus_service
+    ports:
+      - "9090:9090" # เปิด Port 9090
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - model-serving
+    restart: always
+
+  # 3. Grafana Service
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana_service
+    ports:
+      - "3000:3000" # เปิด Port 3000
+    depends_on:
+      - prometheus
+    restart: always
