@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 
 REQUIRED_COLUMNS = {
-    "id",
     "date",
     "bedrooms",
     "bathrooms",
@@ -76,8 +75,10 @@ def engineer_house_features(data: pd.DataFrame) -> pd.DataFrame:
         features[f"log_{column}"] = np.log1p(features[column])
 
     # ID is kept in split files for lineage but must never become a model input.
+    # Serving requests have no ID, so it is dropped only when present.
     # Raw date and renovation-year sentinel are replaced by explicit features.
-    features = features.drop(columns=["id", "date", "yr_renovated"])
+    features = features.drop(columns=["id"], errors="ignore")
+    features = features.drop(columns=["date", "yr_renovated"])
 
     # ZIP code represents a location category, not a measurable number.
     features["zipcode"] = features["zipcode"].astype("string")

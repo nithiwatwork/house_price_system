@@ -1,12 +1,10 @@
-"""04_load_and_predict.py — อ้างอิงรูปแบบจาก Lab 09
-โหลดโมเดลที่ลงทะเบียนไว้ใน MLflow Model Registry ผ่าน Alias (@staging หรือ local artifact)
-และรันคำทำนายกับตัวอย่างข้อมูลอสังหาริมทรัพย์
-"""
 import os
 import sys
+
 import joblib
 import numpy as np
 import pandas as pd
+
 try:
     import mlflow.pyfunc
     MLFLOW_AVAILABLE = True
@@ -15,6 +13,10 @@ except ImportError:
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if MLFLOW_AVAILABLE:
+    mlflow.set_tracking_uri(
+        f"sqlite:///{os.path.join(PROJECT_ROOT, 'mlflow.db').replace(os.sep, '/')}"
+    )
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 

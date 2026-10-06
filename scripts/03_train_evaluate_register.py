@@ -1,6 +1,7 @@
 
 import os
 import sys
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -17,13 +18,17 @@ except ImportError:
     MLFLOW_AVAILABLE = False
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if MLFLOW_AVAILABLE:
+    mlflow.set_tracking_uri(
+        f"sqlite:///{os.path.join(PROJECT_ROOT, 'mlflow.db').replace(os.sep, '/')}"
+    )
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.preprocessing import build_preprocessing_pipeline
 
 
-def train_evaluate_register(preprocessing_run_id: str = None, learning_rate: float = 0.05, max_iter: int = 300, C: float = 1.0, **kwargs):
+def train_evaluate_register(preprocessing_run_id: str | None = None, learning_rate: float = 0.05, max_iter: int = 300, C: float = 1.0, **kwargs):
     """
     Loads preprocessed data, trains a model pipeline, evaluates it, and
     registers the model in the MLflow Model Registry if it meets
@@ -113,7 +118,10 @@ def train_evaluate_register(preprocessing_run_id: str = None, learning_rate: flo
                 model_info = mlflow.sklearn.log_model(
                     sk_model=model,
                     name="house_price_model",
-                    input_example=X_train_proc[:5]
+                    input_example=X_train_proc[:5],
+                    skops_trusted_types=[
+                        "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"
+                    ],
                 )
                 if mape < MAPE_THRESHOLD and artifact_size_mb < MAX_SIZE_MB:
                     registered_model = mlflow.register_model(model_info.model_uri, MODEL_NAME)
