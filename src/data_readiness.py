@@ -6,22 +6,35 @@ enforcing the same train-only fitting rules a production pipeline must follow.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
 from typing import Any
 
-import matplotlib
 import numpy as np
 import pandas as pd
 
-from src.data_ingestion import sha256_file
 from src.feature_engineering import engineer_house_features
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except ImportError:
+    matplotlib = None
+    plt = None
 
 TARGET_COLUMN = "price"
+
+
+def sha256_file(path: Path) -> str:
+    """Return a stable content hash for data-version evidence."""
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def regression_metrics(actual: pd.Series, predicted: np.ndarray) -> dict[str, float]:
