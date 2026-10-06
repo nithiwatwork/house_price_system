@@ -1,59 +1,62 @@
-"""Validate the raw King County housing data before downstream jobs run."""
-
-import argparse
-import json
+﻿import os
 import sys
-from pathlib import Path
+import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+try:
+    import mlflow
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
 
-from src.data_validation import DataValidationError, validate_csv
-
-DEFAULT_DATA_PATH = Path("data/raw/kc_house_data.csv")
-DEFAULT_REPORT_PATH = Path("artifacts/data_validation_report.json")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=DEFAULT_DATA_PATH,
-        help=f"CSV to validate (default: {DEFAULT_DATA_PATH})",
-    )
-    parser.add_argument(
-        "--report",
-        type=Path,
-        default=DEFAULT_REPORT_PATH,
-        help=f"JSON evidence report (default: {DEFAULT_REPORT_PATH})",
-    )
-    return parser.parse_args()
+DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "raw", "kc_house_data.csv")
 
 
-def main() -> int:
-    args = parse_args()
-    try:
-        # A critical error is converted to exit code 1 for Airflow and CI.
-        _, report = validate_csv(args.input, report_path=args.report)
-    except DataValidationError as exc:
-        print("DATA_VALIDATION_ALERT: critical checks failed", file=sys.stderr)
-        print(json.dumps(exc.report.errors[:10], indent=2, default=str), file=sys.stderr)
-        print(f"Evidence report: {args.report}", file=sys.stderr)
-        return 1
+def validate_data(data_path: str = DATA_PATH):
+    """
+    Loads the King County dataset, performs basic validation checks,
+    and logs the results to MLflow.
+    """
 
-    # Exit code 0 means downstream tasks are allowed to continue.
-    print(
-        f"DATA_VALIDATION_PASSED: {report.row_count} rows, "
-        f"{report.column_count} columns"
-    )
-    if report.warnings:
-        print("Warnings for manual review:")
-        print(json.dumps(report.warnings, indent=2, default=str))
-    print(f"Evidence report: {args.report}")
-    return 0
+    # 1. Load data as a Pandas DataFrame
+    df = pd.read_csv(data_path)
+    print(f"Data loaded successfully from {data_path}")
+
+    # 2. Perform validation checks
+    num_rows, num_cols = df.shape
+    missing_values = df.isnull().sum().sum()
+    min_price = float(df["price"].min()) if "price" in df.columns else 0.0
+    max_price = float(df["price"].max()) if "price" in df.columns else 0.0
+
+    print(f"Dataset shape: {num_rows} rows, {num_cols} columns")
+    print(f"Missing values: {missing_values}")
+    print(f"Price range: ${min_price:,.2f} - ${max_price:,.2f}")
+
+    # Check if the data passes our defined criteria
+    validation_status = "Success"
+    if missing_values > 0 or num_rows < 20000 or min_price <= 0:
+        validation_status = "Failed"
+
+    print(f"Validation status: {validation_status}")
+
+    # 3. Log validation results to MLflow if available
+    if MLFLOW_AVAILABLE:
+        mlflow.set_experiment("House Price - Data Validation")
+        with mlflow.start_run():
+            mlflow.set_tag("ml.step", "data_validation")
+            mlflow.log_metric("num_rows", num_rows)
+            mlflow.log_metric("num_cols", num_cols)
+            mlflow.log_metric("missing_values", missing_values)
+            mlflow.log_metric("min_price", min_price)
+            mlflow.log_metric("max_price", max_price)
+            mlflow.log_param("validation_status", validation_status)
+
+    # 4. ทำให้ CI จับได้จริง — ต้องคืน exit code ที่ไม่ใช่ 0 เมื่อข้อมูลไม่ผ่าน
+    if validation_status == "Failed":
+        raise SystemExit("Data validation failed — หยุด pipeline ไม่ให้ไปขั้นถัดไป")
+
+    print("Data validation run finished successfully.")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    target = sys.argv[1] if len(sys.argv) > 1 else DATA_PATH
+    validate_data(target)

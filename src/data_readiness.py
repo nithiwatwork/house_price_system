@@ -52,6 +52,8 @@ class TabularPreprocessor:
             column for column in engineered.columns if column != "zipcode"
         ]
         numeric = engineered[self.numeric_columns].apply(pd.to_numeric)
+        # Division features become inf when bedrooms or sqft_lot is 0.
+        numeric = numeric.replace([np.inf, -np.inf], np.nan)
         self.numeric_medians = numeric.median()
         imputed = numeric.fillna(self.numeric_medians)
         self.numeric_means = imputed.mean()
@@ -68,6 +70,7 @@ class TabularPreprocessor:
     def transform(self, raw_features: pd.DataFrame) -> np.ndarray:
         engineered = engineer_house_features(raw_features)
         numeric = engineered[self.numeric_columns].apply(pd.to_numeric)
+        numeric = numeric.replace([np.inf, -np.inf], np.nan)
         numeric = numeric.fillna(self.numeric_medians)
         scaled_numeric = (numeric - self.numeric_means) / self.numeric_stds
 
