@@ -5,8 +5,8 @@
   1. ค่าหมวดหมู่ที่ไม่เคยเห็นมาก่อน หรือหลุดช่วง เช่น grade=99 หรือ zipcode ผิดปกติ
   2. ค่าตัวเลขที่เป็นไปไม่ได้ เช่น price ติดลบ หรือ bedrooms=99
 """
-import os
 from pathlib import Path
+
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]

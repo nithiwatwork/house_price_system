@@ -4,7 +4,7 @@ name: CI
 
 on:
   push:
-    branches: [main, v.1]
+    branches: [main]
   pull_request:
   workflow_dispatch:                 # ปุ่ม Run workflow ในหน้า Actions
 
@@ -63,7 +63,7 @@ jobs:
       - name: Data tests
         run: pytest tests/test_data.py -v --junitxml=report-data.xml
 
-      - name: Model quality gate (MAPE < 15% & Size < 20MB)
+      - name: Model quality gate
         run: pytest tests/test_model.py -v --junitxml=report-model.xml
 
       - name: Upload test reports      # หลักฐานสำหรับแนบรายงาน — เก็บแม้ job ขึ้นแดง

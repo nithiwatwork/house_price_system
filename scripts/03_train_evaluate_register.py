@@ -12,7 +12,6 @@ try:
     import mlflow
     import mlflow.sklearn
     from mlflow import MlflowClient
-    from mlflow.artifacts import download_artifacts
     MLFLOW_AVAILABLE = True
 except ImportError:
     MLFLOW_AVAILABLE = False
@@ -132,7 +131,7 @@ def train_evaluate_register(preprocessing_run_id: str | None = None, learning_ra
                         version=registered_model.version
                     )
                     print(f"Registered model in MLflow with alias '@staging': {MODEL_NAME}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"MLflow registration note: {e}")
 
     print("Training run finished successfully.")

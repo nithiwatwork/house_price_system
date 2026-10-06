@@ -60,7 +60,7 @@ def load_and_predict():
         X_proc = preprocessor.transform(df)
         preds_log = model.predict(X_proc)
         prediction = np.expm1(preds_log)[0]
-    except Exception:
+    except Exception:  # noqa: BLE001
         print(f"Loading model from local artifact: {LOCAL_MODEL_PATH}")
         model = joblib.load(LOCAL_MODEL_PATH)
         preprocessor = joblib.load(LOCAL_PREP_PATH)
