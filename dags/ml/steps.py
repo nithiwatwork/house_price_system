@@ -20,7 +20,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.preprocessing import build_preprocessing_pipeline
 
 EXPECTED_COLUMNS = [
     "id",
@@ -196,6 +195,8 @@ def transform(run_id: str, examples: dict[str, Any]) -> str:
     X_test = test_df.drop("price", axis=1)
     y_test = test_df["price"].values
 
+    from src.preprocessing import build_preprocessing_pipeline
+
     preprocessor = build_preprocessing_pipeline()
     X_train_proc = preprocessor.fit_transform(X_train)
     X_test_proc = preprocessor.transform(X_test)
@@ -313,12 +314,16 @@ def pusher(run_id: str, model_path: str, metrics: dict[str, Any], schema_path: s
     artifacts_serving.mkdir(parents=True, exist_ok=True)
     include_serving.mkdir(parents=True, exist_ok=True)
 
+    def _safe_copy(src: Path | str, dst: Path | str) -> None:
+        with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+            shutil.copyfileobj(fsrc, fdst)
+
     # 1. Deploy model & preprocessor to serving
-    shutil.copy2(model_path, artifacts_serving / "model.joblib")
-    shutil.copy2(model_path, include_serving / "model.joblib")
+    _safe_copy(model_path, artifacts_serving / "model.joblib")
+    _safe_copy(model_path, include_serving / "model.joblib")
     if (transform_dir / "preprocessor.joblib").exists():
-        shutil.copy2(transform_dir / "preprocessor.joblib", artifacts_serving / "preprocessor.joblib")
-        shutil.copy2(transform_dir / "preprocessor.joblib", include_serving / "preprocessor.joblib")
+        _safe_copy(transform_dir / "preprocessor.joblib", artifacts_serving / "preprocessor.joblib")
+        _safe_copy(transform_dir / "preprocessor.joblib", include_serving / "preprocessor.joblib")
 
     # 2. Log & Register with MLflow if available
     try:

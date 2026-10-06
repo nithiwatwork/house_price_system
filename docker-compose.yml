@@ -19,6 +19,8 @@ services:
     volumes:
       - ./artifacts:/app/artifacts
       - ./data:/app/data
+      - ./serving:/app/serving
+      - ./src:/app/src
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
